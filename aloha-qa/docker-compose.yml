@@ -1,0 +1,32 @@
+services:
+  db:
+    image: mysql:8.0 # официальный образ MySQL
+    environment:
+      MYSQL_ROOT_PASSWORD: root # пароль root (только для стенда!)
+      MYSQL_DATABASE: aloha # база создаётся при первом запуске
+      MYSQL_USER: aloha # пользователь, под которым ходит сайт
+      MYSQL_PASSWORD: aloha
+    ports:
+      - "3307:3306" # снаружи 3307, чтобы не конфликтовать с другим MySQL
+    volumes:
+      # схема из db.sql применяется автоматически при создании пустой базы
+      - ./hawaii_shirts_v2/db.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck: # как Docker понимает, что база готова
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-proot"]
+      interval: 5s
+      retries: 20
+
+  web:
+    build: ./docker # собрать образ по нашему Dockerfile
+    ports:
+      - "8080:80" # сайт будет на http://localhost:8080
+    environment: # эти значения прочитает config.php
+      DB_HOST: db # имя сервиса = адрес базы внутри Docker
+      DB_NAME: aloha
+      DB_USER: aloha
+      DB_PASS: aloha
+    volumes:
+      - ./hawaii_shirts_v2:/var/www/html # правки в hawaii_shirts_v2 сразу видны на сайте
+    depends_on:
+      db:
+        condition: service_healthy # стартовать сайт только после готовности базы
