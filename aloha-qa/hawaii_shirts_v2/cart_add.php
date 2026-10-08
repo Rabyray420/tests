@@ -5,18 +5,18 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') redirect('/index.php');
 csrf_check();
 
 $productId = (int) ($_POST['product_id'] ?? 0);
+$size = trim((string) ($_POST['size'] ?? ''));
 $quantity = max(1, (int) ($_POST['quantity'] ?? 1));
-$redirectTo = $_POST['redirect'] ?? '/cart.php';
+$redirectTo = safe_redirect_path($_POST['redirect'] ?? null, '/cart.php');
 
-$stmt = get_pdo()->prepare('SELECT id, stock FROM products WHERE id = ? AND active = 1');
-$stmt->execute([$productId]);
-$product = $stmt->fetch();
+$result = cart_add($productId, $size, $quantity);
 
-if ($product) {
-    cart_add($productId, $quantity);
-    flash_set('Товар добавлен в корзину.', 'success');
+if (!$result['ok']) {
+    flash_set($result['error'], 'error');
+} elseif ($result['clamped']) {
+    flash_set('В корзину добавлено максимально доступное количество: ' . $result['quantity'] . ' шт.', 'success');
 } else {
-    flash_set('Товар недоступен.', 'error');
+    flash_set('Товар добавлен в корзину.', 'success');
 }
 
 redirect($redirectTo);

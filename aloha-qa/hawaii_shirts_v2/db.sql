@@ -1,6 +1,8 @@
 -- Схема базы данных Aloha Threads для MySQL.
 -- Импортируйте этот файл через phpMyAdmin (или `mysql -u USER -p DBNAME < db.sql`)
 -- в пустую базу данных, созданную в панели хостинга.
+-- Если база уже создана и работает — НЕ импортируйте этот файл повторно,
+-- а примените миграцию из папки migrations/.
 
 SET NAMES utf8mb4;
 
@@ -27,12 +29,24 @@ CREATE TABLE products (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Остатки по размерам. Если у товара нет строк в этой таблице — он продаётся
+-- без выбора размера, а остаток берётся из products.stock.
+-- Если строки есть — products.stock хранит сумму остатков по всем размерам.
+CREATE TABLE product_sizes (
+  product_id INT NOT NULL,
+  size VARCHAR(10) NOT NULL,
+  stock INT NOT NULL DEFAULT 0,
+  PRIMARY KEY (product_id, size),
+  FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE cart_items (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
   product_id INT NOT NULL,
+  size VARCHAR(10) NOT NULL DEFAULT '',
   quantity INT NOT NULL DEFAULT 1,
-  UNIQUE KEY uniq_user_product (user_id, product_id),
+  UNIQUE KEY uniq_user_product_size (user_id, product_id, size),
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -48,7 +62,11 @@ CREATE TABLE orders (
   shipping_country VARCHAR(100) NOT NULL,
   shipping_city VARCHAR(100) NOT NULL,
   shipping_street VARCHAR(190) NOT NULL,
+  shipping_house VARCHAR(20) NOT NULL DEFAULT '',
+  shipping_apartment VARCHAR(20) NOT NULL DEFAULT '',
   shipping_zip VARCHAR(20) NOT NULL,
+  cancel_reason TEXT NULL,
+  cancel_requested_at DATETIME NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id)
@@ -59,6 +77,7 @@ CREATE TABLE order_items (
   order_id INT NOT NULL,
   product_id INT NOT NULL,
   name VARCHAR(190) NOT NULL,
+  size VARCHAR(10) NOT NULL DEFAULT '',
   price DECIMAL(10,2) NOT NULL,
   quantity INT NOT NULL,
   FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,

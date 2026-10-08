@@ -3,7 +3,7 @@ require_once __DIR__ . '/includes/bootstrap.php';
 
 if (current_user()) redirect('/account.php');
 
-$error = '';
+$errors = [];
 $name = $email = $phone = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -13,12 +13,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $phone = trim($_POST['phone'] ?? '');
     $password = $_POST['password'] ?? '';
 
-    $result = register_user($email, $password, $name, $phone ?: null);
-    if ($result['ok']) {
-        cart_merge_into_user($_SESSION['user_id']);
-        redirect('/account.php');
+    if ($name === '') $errors['name'] = 'Укажите имя';
+
+    if ($email === '') $errors['email'] = 'Укажите email';
+    elseif (!is_valid_email($email)) $errors['email'] = 'Введите корректный email, например name@example.ru';
+
+    // Телефон при регистрации необязателен, но если введён — должен быть полным.
+    $normalizedPhone = null;
+    if (!phone_is_blank($phone)) {
+        $normalizedPhone = normalize_phone($phone);
+        if ($normalizedPhone === null) $errors['phone'] = 'Введите телефон в формате +7 000-000-00-00';
+        else $phone = $normalizedPhone;
+    } else {
+        $phone = '';
     }
-    $error = $result['error'];
+
+    if ($password === '') $errors['password'] = 'Укажите пароль';
+    elseif (strlen($password) < 6) $errors['password'] = 'Пароль должен быть не короче 6 символов';
+
+    if (empty($errors)) {
+        $result = register_user($email, $password, $name, $normalizedPhone);
+        if ($result['ok']) {
+            cart_merge_into_user($_SESSION['user_id']);
+            redirect('/account.php');
+        }
+        $errors['email'] = $result['error'];
+    }
 }
 
 $pageTitle = 'Регистрация — Aloha Threads';
@@ -29,11 +49,10 @@ require __DIR__ . '/includes/header.php';
   <h1 style="text-align:center">Регистрация</h1>
   <form action="/register.php" method="post" class="card">
     <?= csrf_field() ?>
-    <input type="text" name="name" placeholder="Имя" value="<?= e($name) ?>" required>
-    <input type="email" name="email" placeholder="Email" value="<?= e($email) ?>" required>
-    <input type="tel" name="phone" placeholder="Телефон (необязательно)" value="<?= e($phone) ?>">
-    <input type="password" name="password" placeholder="Пароль (от 6 символов)" required>
-    <?php if ($error): ?><p class="error-text"><?= e($error) ?></p><?php endif; ?>
+    <?= form_field('Имя', 'name', $name, $errors, ['autocomplete' => 'name']) ?>
+    <?= form_field('Email', 'email', $email, $errors, ['type' => 'email', 'autocomplete' => 'email', 'placeholder' => 'name@example.ru']) ?>
+    <?= form_field('Телефон (необязательно)', 'phone', $phone === '' ? PHONE_PLACEHOLDER : $phone, $errors, ['required' => false] + phone_field_attrs()) ?>
+    <?= form_field('Пароль (от 6 символов)', 'password', '', $errors, ['type' => 'password', 'autocomplete' => 'new-password']) ?>
     <button type="submit" class="btn btn-lagoon" style="width:100%">Зарегистрироваться</button>
   </form>
   <p class="muted" style="text-align:center;margin-top:1rem">

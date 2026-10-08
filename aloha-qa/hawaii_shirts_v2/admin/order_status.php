@@ -13,4 +13,4 @@ if (array_key_exists($status, STATUS_LABELS)) {
     $stmt->execute([$status, $id]);
 }
 
-redirect('/admin/orders.php');
+redirect(safe_redirect_path($_POST['back'] ?? null, '/admin/orders.php'));

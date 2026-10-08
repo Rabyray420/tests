@@ -3,16 +3,24 @@ require_once __DIR__ . '/includes/bootstrap.php';
 
 $pdo = get_pdo();
 $user = current_user();
-$errors = [];
+$errors = [];     // ошибки по полям
+$formErrors = []; // общие ошибки (склад, пустая корзина)
 
-function checkout_resolve_items(PDO $pdo, string $mode, int $productId = 0, int $quantity = 1): array {
+/**
+ * Позиции заказа: одна позиция («Купить сейчас») или вся корзина.
+ * Формат как у cart_items(): product_id, size, quantity, product, available.
+ */
+function checkout_resolve_items(PDO $pdo, string $mode, int $productId = 0, string $size = '', int $quantity = 1): array {
     if ($mode === 'buynow') {
-        $stmt = $pdo->prepare('SELECT * FROM products WHERE id = ? AND active = 1');
-        $stmt->execute([$productId]);
-        $product = $stmt->fetch();
-        if (!$product) return [];
-        $quantity = max(1, min($quantity, (int) $product['stock']));
-        return [['product_id' => (int) $product['id'], 'quantity' => $quantity, 'product' => $product]];
+        $info = resolve_stock($pdo, $productId, $size);
+        if (!$info || $info['available'] < 1) return [];
+        return [[
+            'product_id' => $productId,
+            'size' => $size,
+            'quantity' => max(1, min($quantity, $info['available'])),
+            'product' => $info['product'],
+            'available' => $info['available'],
+        ]];
     }
     return cart_items();
 }
@@ -20,27 +28,23 @@ function checkout_resolve_items(PDO $pdo, string $mode, int $productId = 0, int 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check();
     $mode = ($_POST['mode'] ?? '') === 'buynow' ? 'buynow' : 'cart';
-    $items = checkout_resolve_items($pdo, $mode, (int) ($_POST['product_id'] ?? 0), (int) ($_POST['quantity'] ?? 1));
+    $items = checkout_resolve_items(
+        $pdo, $mode,
+        (int) ($_POST['product_id'] ?? 0),
+        trim((string) ($_POST['size'] ?? '')),
+        (int) ($_POST['quantity'] ?? 1)
+    );
 
-    $name = trim($_POST['name'] ?? '');
-    $email = trim($_POST['email'] ?? '');
-    $phone = trim($_POST['phone'] ?? '');
-    $country = trim($_POST['country'] ?? '');
-    $city = trim($_POST['city'] ?? '');
-    $street = trim($_POST['street'] ?? '');
-    $zip = trim($_POST['zip'] ?? '');
+    [$v, $errors] = validate_checkout($_POST);
 
-    if (empty($items)) $errors[] = 'Корзина пуста или товар недоступен.';
-    if ($name === '' || $email === '' || $phone === '') $errors[] = 'Заполните контактные данные.';
-    if ($country === '' || $city === '' || $street === '' || $zip === '') $errors[] = 'Заполните адрес доставки.';
-
+    if (empty($items)) $formErrors[] = 'Корзина пуста или товар недоступен.';
     foreach ($items as $item) {
-        if ($item['quantity'] > (int) $item['product']['stock']) {
-            $errors[] = 'Недостаточно товара на складе: ' . $item['product']['name'];
+        if ($item['quantity'] > $item['available']) {
+            $formErrors[] = 'Недостаточно товара на складе: ' . item_label($item['product']['name'], $item['size']);
         }
     }
 
-    if (empty($errors)) {
+    if (empty($errors) && empty($formErrors)) {
         $total = 0.0;
         foreach ($items as $item) $total += $item['quantity'] * (float) $item['product']['price'];
 
@@ -48,22 +52,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         try {
             $stmt = $pdo->prepare(
                 'INSERT INTO orders (user_id, status, total, contact_name, contact_email, contact_phone,
-                    shipping_country, shipping_city, shipping_street, shipping_zip)
-                 VALUES (?, \'PAID\', ?, ?, ?, ?, ?, ?, ?, ?)'
+                    shipping_country, shipping_city, shipping_street, shipping_house, shipping_apartment, shipping_zip)
+                 VALUES (?, \'PAID\', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             );
-            $stmt->execute([$user['id'] ?? null, $total, $name, $email, $phone, $country, $city, $street, $zip]);
+            $stmt->execute([
+                $user['id'] ?? null, $total, $v['name'], $v['email'], $v['phone'],
+                $v['country'], $v['city'], $v['street'], $v['house'], $v['apartment'], $v['zip'],
+            ]);
             $orderId = (int) $pdo->lastInsertId();
 
             $orderItemsForConfirmation = [];
             foreach ($items as $item) {
                 $p = $item['product'];
-                $stmt = $pdo->prepare('INSERT INTO order_items (order_id, product_id, name, price, quantity) VALUES (?, ?, ?, ?, ?)');
-                $stmt->execute([$orderId, $p['id'], $p['name'], $p['price'], $item['quantity']]);
+                $label = item_label($p['name'], $item['size']);
 
-                $stmt = $pdo->prepare('UPDATE products SET stock = stock - ? WHERE id = ?');
-                $stmt->execute([$item['quantity'], $p['id']]);
+                // Списываем остаток; условие stock >= ? защищает от одновременной покупки последней штуки.
+                if ($item['size'] === '') {
+                    $upd = $pdo->prepare('UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?');
+                    $upd->execute([$item['quantity'], $p['id'], $item['quantity']]);
+                    if ($upd->rowCount() === 0) throw new RuntimeException('Недостаточно товара на складе: ' . $label);
+                } else {
+                    $upd = $pdo->prepare('UPDATE product_sizes SET stock = stock - ? WHERE product_id = ? AND size = ? AND stock >= ?');
+                    $upd->execute([$item['quantity'], $p['id'], $item['size'], $item['quantity']]);
+                    if ($upd->rowCount() === 0) throw new RuntimeException('Недостаточно товара на складе: ' . $label);
+                    $pdo->prepare('UPDATE products SET stock = stock - ? WHERE id = ?')->execute([$item['quantity'], $p['id']]);
+                }
 
-                $orderItemsForConfirmation[] = ['name' => $p['name'], 'price' => (float) $p['price'], 'quantity' => $item['quantity']];
+                $pdo->prepare('INSERT INTO order_items (order_id, product_id, name, size, price, quantity) VALUES (?, ?, ?, ?, ?, ?)')
+                    ->execute([$orderId, $p['id'], $p['name'], $item['size'], $p['price'], $item['quantity']]);
+
+                $orderItemsForConfirmation[] = ['name' => $label, 'price' => (float) $p['price'], 'quantity' => $item['quantity']];
             }
 
             if ($mode === 'cart') cart_clear();
@@ -74,37 +92,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'id' => $orderId,
                 'status' => 'PAID',
                 'total' => $total,
-                'contact_email' => $email,
+                'contact_email' => $v['email'],
                 'items' => $orderItemsForConfirmation,
             ];
             redirect('/order_confirmation.php');
+        } catch (RuntimeException $e) {
+            $pdo->rollBack();
+            $formErrors[] = $e->getMessage();
         } catch (Throwable $e) {
             $pdo->rollBack();
-            $errors[] = 'Не удалось оформить заказ. Попробуйте ещё раз.';
+            $formErrors[] = 'Не удалось оформить заказ. Попробуйте ещё раз.';
         }
     }
 } else {
     if (isset($_GET['product_id'])) {
         $mode = 'buynow';
-        $productId = (int) $_GET['product_id'];
-        $quantity = max(1, (int) ($_GET['quantity'] ?? 1));
+        $items = checkout_resolve_items(
+            $pdo, $mode,
+            (int) $_GET['product_id'],
+            trim((string) ($_GET['size'] ?? '')),
+            (int) ($_GET['quantity'] ?? 1)
+        );
     } else {
         $mode = 'cart';
-        $productId = 0;
-        $quantity = 1;
+        $items = checkout_resolve_items($pdo, $mode);
     }
-    $items = checkout_resolve_items($pdo, $mode, $productId, $quantity);
-    $name = $user['name'] ?? '';
-    $email = $user['email'] ?? '';
-    $phone = $user['phone'] ?? '';
-    $country = 'Россия';
-    $city = $street = $zip = '';
+    $v = [
+        'name' => $user['name'] ?? '',
+        'email' => $user['email'] ?? '',
+        'phone' => normalize_phone($user['phone'] ?? null) ?? '',
+        'country' => 'Россия',
+        'city' => '', 'street' => '', 'house' => '', 'apartment' => '', 'zip' => '',
+    ];
 }
 
-if (empty($items) && empty($errors)) {
+if (empty($items) && empty($formErrors)) {
     $pageTitle = 'Оформление заказа — Aloha Threads';
     require __DIR__ . '/includes/header.php';
-    echo '<p class="muted">Нечего оформлять — корзина пуста. <a href="/index.php" style="color:var(--lagoon-600);font-weight:600">Перейти в каталог →</a></p>';
+    echo '<p class="muted">Нечего оформлять — корзина пуста или товар недоступен. <a href="/index.php" style="color:var(--lagoon-600);font-weight:600">Перейти в каталог →</a></p>';
     require __DIR__ . '/includes/footer.php';
     exit;
 }
@@ -118,32 +143,40 @@ require __DIR__ . '/includes/header.php';
 
 <h1>Оформление заказа</h1>
 
-<?php foreach ($errors as $err): ?>
+<?php foreach ($formErrors as $err): ?>
   <div class="flash flash-error"><?= e($err) ?></div>
 <?php endforeach; ?>
+<?php if (!empty($errors)): ?>
+  <div class="flash flash-error">Проверьте выделенные поля и попробуйте снова.</div>
+<?php endif; ?>
 
 <div class="grid-2">
   <form action="/checkout.php" method="post">
     <?= csrf_field() ?>
     <input type="hidden" name="mode" value="<?= e($mode) ?>">
-    <?php if ($mode === 'buynow'): ?>
+    <?php if ($mode === 'buynow' && !empty($items)): ?>
       <input type="hidden" name="product_id" value="<?= (int) $items[0]['product_id'] ?>">
+      <input type="hidden" name="size" value="<?= e($items[0]['size']) ?>">
       <input type="hidden" name="quantity" value="<?= (int) $items[0]['quantity'] ?>">
     <?php endif; ?>
 
     <fieldset>
       <legend>Контактные данные</legend>
-      <input type="text" name="name" placeholder="Имя и фамилия" value="<?= e($name) ?>" required>
-      <input type="email" name="email" placeholder="Email" value="<?= e($email) ?>" required>
-      <input type="tel" name="phone" placeholder="Телефон" value="<?= e($phone) ?>" required>
+      <?= form_field('Имя и фамилия', 'name', $v['name'], $errors, ['autocomplete' => 'name']) ?>
+      <?= form_field('Email', 'email', $v['email'], $errors, ['type' => 'email', 'autocomplete' => 'email', 'placeholder' => 'name@example.ru']) ?>
+      <?= form_field('Телефон', 'phone', $v['phone'] === '' ? PHONE_PLACEHOLDER : $v['phone'], $errors, phone_field_attrs()) ?>
     </fieldset>
 
     <fieldset>
       <legend>Адрес доставки</legend>
-      <input type="text" name="country" placeholder="Страна" value="<?= e($country) ?>" required>
-      <input type="text" name="city" placeholder="Город" value="<?= e($city) ?>" required>
-      <input type="text" name="street" placeholder="Улица, дом, квартира" value="<?= e($street) ?>" required>
-      <input type="text" name="zip" placeholder="Индекс" value="<?= e($zip) ?>" required>
+      <?= form_field('Страна', 'country', $v['country'], $errors, ['autocomplete' => 'country-name']) ?>
+      <?= form_field('Город', 'city', $v['city'], $errors, ['autocomplete' => 'address-level2']) ?>
+      <?= form_field('Улица', 'street', $v['street'], $errors, ['autocomplete' => 'address-line1', 'placeholder' => 'Например, Тверская улица']) ?>
+      <div class="field-row">
+        <?= form_field('Дом', 'house', $v['house'], $errors, ['maxlength' => 20, 'placeholder' => 'Например, 12к1']) ?>
+        <?= form_field('Квартира / офис', 'apartment', $v['apartment'], $errors, ['maxlength' => 20, 'autocomplete' => 'address-line2', 'placeholder' => 'Например, 45']) ?>
+      </div>
+      <?= form_field('Индекс', 'zip', $v['zip'], $errors, ['autocomplete' => 'postal-code', 'inputmode' => 'numeric', 'maxlength' => 20]) ?>
     </fieldset>
 
     <fieldset>
@@ -169,9 +202,9 @@ require __DIR__ . '/includes/header.php';
   <div class="card" style="height:fit-content">
     <h2 style="margin-top:0">Ваш заказ</h2>
     <?php foreach ($items as $item): ?>
-      <div class="product-card__row" style="margin-bottom:.5rem;font-size:.9rem">
-        <span><?= e($item['product']['name']) ?> × <?= $item['quantity'] ?></span>
-        <span><?= money($item['quantity'] * (float) $item['product']['price']) ?></span>
+      <div class="product-card__row" style="margin-bottom:.5rem;font-size:.9rem;gap:.75rem">
+        <span><?= e(item_label($item['product']['name'], $item['size'])) ?> × <?= $item['quantity'] ?></span>
+        <span style="white-space:nowrap"><?= money($item['quantity'] * (float) $item['product']['price']) ?></span>
       </div>
     <?php endforeach; ?>
     <div class="product-card__row" style="border-top:1px solid var(--lagoon-200);padding-top:.75rem;font-weight:600">
