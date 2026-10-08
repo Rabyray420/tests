@@ -5,10 +5,11 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') redirect('/cart.php');
 csrf_check();
 
 $productId = (int) ($_POST['product_id'] ?? 0);
+$size = trim((string) ($_POST['size'] ?? ''));
 $quantity = (int) ($_POST['quantity'] ?? 1);
 
 if ($productId > 0) {
-    cart_set_quantity($productId, $quantity);
+    cart_set_quantity($productId, $size, $quantity);
 }
 
 redirect('/cart.php');

@@ -13,7 +13,6 @@ $adminEmail = 'admin@hawaii-shirts.test';
 // Пароль админа берётся из переменной окружения ADMIN_PASSWORD.
 // Если её нет — генерируется случайный и показывается один раз в выводе скрипта.
 $adminPassword = getenv('ADMIN_PASSWORD') ?: bin2hex(random_bytes(8));
-
 $stmt = $pdo->prepare('SELECT id FROM users WHERE email = ?');
 $stmt->execute([$adminEmail]);
 if (!$stmt->fetch()) {
@@ -38,7 +37,20 @@ if ($count === 0) {
         ['Golden Aloha', 'Премиальная рубашка с золотистым принтом пальм на чёрном фоне.', 4290, 8, 'Премиум'],
     ];
     $stmt = $pdo->prepare('INSERT INTO products (name, description, price, stock, category) VALUES (?, ?, ?, ?, ?)');
-    foreach ($products as $p) $stmt->execute($p);
+    $sizeStmt = $pdo->prepare('INSERT INTO product_sizes (product_id, size, stock) VALUES (?, ?, ?)');
+    foreach ($products as $p) {
+        $stmt->execute($p);
+        $productId = (int) $pdo->lastInsertId();
+        // Раскладываем общий остаток по размерам S–XL.
+        $total = (int) $p[3];
+        $s = (int) round($total * 0.2);
+        $m = (int) round($total * 0.35);
+        $l = (int) round($total * 0.3);
+        $xl = $total - $s - $m - $l;
+        foreach (['S' => $s, 'M' => $m, 'L' => $l, 'XL' => $xl] as $size => $qty) {
+            $sizeStmt->execute([$productId, $size, $qty]);
+        }
+    }
     echo 'Добавлено товаров: ' . count($products) . "\n";
 } else {
     echo "Товары уже есть в базе, пропускаю.\n";

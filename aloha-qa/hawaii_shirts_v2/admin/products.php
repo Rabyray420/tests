@@ -3,16 +3,14 @@ require_once __DIR__ . '/../includes/bootstrap.php';
 require_admin();
 
 $products = get_pdo()->query('SELECT * FROM products ORDER BY created_at DESC')->fetchAll();
+$sizeMap = sizes_for_products(get_pdo(), array_column($products, 'id'));
 
 $pageTitle = 'Товары — Админка';
 require __DIR__ . '/../includes/header.php';
 ?>
 
 <h1>Админ-панель</h1>
-<div class="pills">
-  <a href="/admin/products.php" class="pill active">Товары</a>
-  <a href="/admin/orders.php" class="pill">Заказы</a>
-</div>
+<?= admin_nav('products') ?>
 
 <div class="text-right mt-2" style="margin-bottom:1rem">
   <a href="/admin/product_form.php" class="btn btn-sunset btn-pill">+ Добавить товар</a>
@@ -38,7 +36,14 @@ require __DIR__ . '/../includes/header.php';
           </td>
           <td class="muted"><?= e($p['category']) ?></td>
           <td><?= money((float) $p['price']) ?></td>
-          <td><?= (int) $p['stock'] ?></td>
+          <td>
+            <?= (int) $p['stock'] ?>
+            <?php if (!empty($sizeMap[(int) $p['id']])): ?>
+              <br><span class="muted" style="font-size:.75rem">
+                <?= e(implode(' · ', array_map(fn($s, $n) => "$s:$n", array_keys($sizeMap[(int) $p['id']]), $sizeMap[(int) $p['id']]))) ?>
+              </span>
+            <?php endif; ?>
+          </td>
           <td>
             <form action="/admin/product_toggle.php" method="post" class="inline-form">
               <?= csrf_field() ?>

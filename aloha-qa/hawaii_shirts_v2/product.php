@@ -2,7 +2,8 @@
 require_once __DIR__ . '/includes/bootstrap.php';
 
 $id = (int) ($_GET['id'] ?? 0);
-$stmt = get_pdo()->prepare('SELECT * FROM products WHERE id = ?');
+$pdo = get_pdo();
+$stmt = $pdo->prepare('SELECT * FROM products WHERE id = ?');
 $stmt->execute([$id]);
 $product = $stmt->fetch();
 
@@ -15,7 +16,13 @@ if (!$product) {
     exit;
 }
 
-$outOfStock = (int) $product['stock'] === 0;
+$sizes = product_sizes($pdo, $id);
+$hasSizes = !empty($sizes);
+$stock = (int) $product['stock'];
+$outOfStock = $stock === 0 || !(int) $product['active'];
+// Без размеров максимум — остаток товара; с размерами его выставит JS по выбранному размеру.
+$qtyMax = $hasSizes ? max(1, max($sizes)) : max(1, $stock);
+
 $pageTitle = $product['name'] . ' — Aloha Threads';
 require __DIR__ . '/includes/header.php';
 ?>
@@ -36,8 +43,8 @@ require __DIR__ . '/includes/header.php';
     <p class="price" style="font-size:1.5rem"><?= money((float) $product['price']) ?></p>
     <p><?= nl2br(e($product['description'])) ?></p>
 
-    <p class="<?= $outOfStock ? 'stock-out' : 'muted' ?>" style="font-weight:600">
-      <?= $outOfStock ? 'Нет в наличии' : 'В наличии: ' . (int) $product['stock'] . ' шт.' ?>
+    <p class="<?= $outOfStock ? 'stock-out' : 'muted' ?>" style="font-weight:600" data-stock-note>
+      <?= $outOfStock ? 'Нет в наличии' : 'В наличии: ' . $stock . ' шт.' ?>
     </p>
 
     <?php if (!$outOfStock): ?>
@@ -46,24 +53,59 @@ require __DIR__ . '/includes/header.php';
         <input type="hidden" name="product_id" value="<?= (int) $product['id'] ?>">
         <input type="hidden" name="redirect" value="/product.php?id=<?= (int) $product['id'] ?>">
 
-        <div class="actions" style="margin-bottom:1rem">
-          <label class="muted">Количество</label>
-          <div class="qty-control">
-            <button type="button" onclick="this.nextElementSibling.stepDown()">−</button>
-            <input type="number" name="quantity" value="1" min="1" max="<?= (int) $product['stock'] ?>">
-            <button type="button" onclick="this.previousElementSibling.stepUp()">+</button>
+        <?php if ($hasSizes): ?>
+          <div class="size-head">
+            <span class="size-title">Размер</span>
+            <button type="button" class="link-button size-chart-link" data-open-dialog="size-chart">Размерная сетка</button>
           </div>
+          <div class="size-pills" data-size-group>
+            <?php foreach ($sizes as $size => $sizeStock): ?>
+              <label class="size-pill <?= $sizeStock < 1 ? 'is-disabled' : '' ?>">
+                <input type="radio" name="size" value="<?= e($size) ?>" data-stock="<?= (int) $sizeStock ?>"
+                       data-size-required required <?= $sizeStock < 1 ? 'disabled' : '' ?>>
+                <span><?= e($size) ?></span>
+              </label>
+            <?php endforeach; ?>
+          </div>
+        <?php endif; ?>
+
+        <div class="actions" style="margin-bottom:1rem">
+          <span class="muted">Количество</span>
+          <?= qty_stepper(1, $qtyMax) ?>
         </div>
 
         <div class="actions">
           <button type="submit" class="btn btn-outline" style="flex:1">В корзину</button>
-          <button type="submit" formaction="/checkout.php" formmethod="get" class="btn btn-sunset" style="flex:1">
-            Купить сейчас
-          </button>
+          <button type="submit" formaction="/buynow.php" class="btn btn-sunset" style="flex:1">Купить сейчас</button>
         </div>
       </form>
     <?php endif; ?>
   </div>
 </div>
+
+<?php if ($hasSizes): ?>
+  <dialog id="size-chart" class="modal">
+    <h2 style="margin-top:0">Размерная сетка</h2>
+    <div style="overflow-x:auto">
+      <table class="size-table">
+        <thead><tr><th>Размер</th><th>Российский</th><th>Обхват груди, см</th><th>Обхват талии, см</th></tr></thead>
+        <tbody>
+          <?php foreach (SIZE_CHART as $size => $row): ?>
+            <tr>
+              <td><strong><?= e($size) ?></strong></td>
+              <td><?= e($row['ru']) ?></td>
+              <td><?= e($row['chest']) ?></td>
+              <td><?= e($row['waist']) ?></td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted" style="font-size:.85rem">Измерьте обхват груди по самой широкой части. Между двумя размерами выбирайте больший — рубашка будет свободнее.</p>
+    <div class="actions" style="justify-content:flex-end">
+      <button type="button" class="btn btn-lagoon btn-sm" data-close-dialog>Закрыть</button>
+    </div>
+  </dialog>
+<?php endif; ?>
 
 <?php require __DIR__ . '/includes/footer.php'; ?>

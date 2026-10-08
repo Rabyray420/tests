@@ -2,31 +2,59 @@
 require_once __DIR__ . '/../includes/bootstrap.php';
 require_admin();
 
+$pdo = get_pdo();
 $id = (int) ($_GET['id'] ?? $_POST['id'] ?? 0);
 $isEdit = $id > 0;
 $product = ['name' => '', 'description' => '', 'price' => '', 'stock' => '', 'category' => '', 'image_url' => null, 'active' => 1];
+$formSizes = []; // размер => остаток (строкой, как введено в форме)
 $error = '';
 
 if ($isEdit) {
-    $stmt = get_pdo()->prepare('SELECT * FROM products WHERE id = ?');
+    $stmt = $pdo->prepare('SELECT * FROM products WHERE id = ?');
     $stmt->execute([$id]);
     $found = $stmt->fetch();
     if (!$found) redirect('/admin/products.php');
     $product = $found;
+    foreach (product_sizes($pdo, $id) as $size => $stock) $formSizes[$size] = (string) $stock;
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check();
     $product['name'] = trim($_POST['name'] ?? '');
     $product['description'] = trim($_POST['description'] ?? '');
-    $product['price'] = $_POST['price'] ?? '';
-    $product['stock'] = $_POST['stock'] ?? '';
+    $product['price'] = trim((string) ($_POST['price'] ?? ''));
+    $product['stock'] = trim((string) ($_POST['stock'] ?? ''));
     $product['category'] = trim($_POST['category'] ?? '');
     $product['active'] = isset($_POST['active']) ? 1 : 0;
     $removeImage = isset($_POST['remove_image']);
 
-    if ($product['name'] === '' || $product['description'] === '' || $product['price'] === '' || $product['category'] === '') {
+    // Остатки по размерам: пустое поле = такой размер не продаётся.
+    $formSizes = [];
+    $sizesInput = is_array($_POST['sizes'] ?? null) ? $_POST['sizes'] : [];
+    $sizeStocks = [];
+    foreach (SIZES as $s) {
+        $raw = trim((string) ($sizesInput[$s] ?? ''));
+        if ($raw === '') continue;
+        $formSizes[$s] = $raw;
+        if (!ctype_digit($raw)) {
+            $error = 'Остаток по размеру ' . $s . ' должен быть целым числом, не меньше 0';
+        } else {
+            $sizeStocks[$s] = (int) $raw;
+        }
+    }
+
+    if ($error === '' && ($product['name'] === '' || $product['description'] === '' || $product['price'] === '' || $product['category'] === '')) {
         $error = 'Заполните все обязательные поля товара';
+    }
+    if ($error === '' && (!is_numeric($product['price']) || (float) $product['price'] < 0)) {
+        $error = 'Цена должна быть числом, не меньше 0';
+    }
+    if ($error === '') {
+        if (!empty($sizeStocks)) {
+            $product['stock'] = (string) array_sum($sizeStocks); // общий остаток — сумма по размерам
+        } elseif ($product['stock'] === '' || !ctype_digit($product['stock'])) {
+            $error = 'Укажите остаток на складе — либо по размерам, либо общий';
+        }
     }
 
     if ($error === '') {
@@ -38,7 +66,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($error === '') {
-        $pdo = get_pdo();
         $imageUrl = $product['image_url'];
         if ($newImageUrl !== null) {
             delete_uploaded_image($imageUrl);
@@ -48,22 +75,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $imageUrl = null;
         }
 
-        if ($isEdit) {
-            $stmt = $pdo->prepare(
-                'UPDATE products SET name=?, description=?, price=?, stock=?, category=?, image_url=?, active=? WHERE id=?'
-            );
-            $stmt->execute([
-                $product['name'], $product['description'], (float) $product['price'], (int) $product['stock'],
-                $product['category'], $imageUrl, $product['active'], $id,
-            ]);
-        } else {
-            $stmt = $pdo->prepare(
-                'INSERT INTO products (name, description, price, stock, category, image_url, active) VALUES (?, ?, ?, ?, ?, ?, ?)'
-            );
-            $stmt->execute([
-                $product['name'], $product['description'], (float) $product['price'], (int) $product['stock'],
-                $product['category'], $imageUrl, $product['active'],
-            ]);
+        $pdo->beginTransaction();
+        try {
+            if ($isEdit) {
+                $pdo->prepare('UPDATE products SET name=?, description=?, price=?, stock=?, category=?, image_url=?, active=? WHERE id=?')
+                    ->execute([$product['name'], $product['description'], (float) $product['price'], (int) $product['stock'],
+                        $product['category'], $imageUrl, $product['active'], $id]);
+            } else {
+                $pdo->prepare('INSERT INTO products (name, description, price, stock, category, image_url, active) VALUES (?, ?, ?, ?, ?, ?, ?)')
+                    ->execute([$product['name'], $product['description'], (float) $product['price'], (int) $product['stock'],
+                        $product['category'], $imageUrl, $product['active']]);
+                $id = (int) $pdo->lastInsertId();
+            }
+            $pdo->prepare('DELETE FROM product_sizes WHERE product_id = ?')->execute([$id]);
+            $insert = $pdo->prepare('INSERT INTO product_sizes (product_id, size, stock) VALUES (?, ?, ?)');
+            foreach ($sizeStocks as $s => $stock) $insert->execute([$id, $s, $stock]);
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
         }
         redirect('/admin/products.php');
     }
@@ -75,10 +105,7 @@ require __DIR__ . '/../includes/header.php';
 ?>
 
 <h1>Админ-панель</h1>
-<div class="pills">
-  <a href="/admin/products.php" class="pill active">Товары</a>
-  <a href="/admin/orders.php" class="pill">Заказы</a>
-</div>
+<?= admin_nav('products') ?>
 
 <div class="grid-2">
   <form id="product-form-hidden" action="/admin/product_form.php" method="post" enctype="multipart/form-data" class="card">
@@ -91,11 +118,27 @@ require __DIR__ . '/../includes/header.php';
     <textarea name="description" placeholder="Описание" rows="3" required><?= e($product['description']) ?></textarea>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
-      <input type="number" name="price" placeholder="Цена, ₽" min="0" step="1" value="<?= e((string) $product['price']) ?>" required>
-      <input type="number" name="stock" placeholder="Остаток на складе" min="0" step="1" value="<?= e((string) $product['stock']) ?>" required>
+      <input type="number" name="price" placeholder="Цена, ₽" min="0" step="1" value="<?= e((string) (is_numeric($product['price']) ? (float) $product['price'] : $product['price'])) ?>" required>
+      <input type="number" name="stock" id="stock-input" placeholder="Общий остаток" min="0" step="1" value="<?= e((string) $product['stock']) ?>" <?= empty($formSizes) ? '' : 'readonly' ?>>
     </div>
 
     <input type="text" name="category" placeholder="Категория (например, Классические)" value="<?= e($product['category']) ?>" required>
+
+    <fieldset class="size-admin">
+      <legend>Размеры и остатки</legend>
+      <p class="muted" style="font-size:.85rem;margin:0 0 .5rem">
+        Укажите остаток для каждого размера, который продаётся. Пустое поле — размера нет.
+        Если ни один размер не указан, товар продаётся без выбора размера, а остаток берётся из поля выше.
+      </p>
+      <div class="size-admin__grid">
+        <?php foreach (SIZES as $s): ?>
+          <label class="size-admin__cell">
+            <span><?= e($s) ?></span>
+            <input type="number" name="sizes[<?= e($s) ?>]" min="0" step="1" placeholder="—" value="<?= e($formSizes[$s] ?? '') ?>" data-size-stock-input>
+          </label>
+        <?php endforeach; ?>
+      </div>
+    </fieldset>
 
     <label class="checkbox-row">
       <input type="checkbox" name="active" <?= $product['active'] ? 'checked' : '' ?>>
@@ -133,7 +176,5 @@ require __DIR__ . '/../includes/header.php';
     <?php endif; ?>
   </div>
 </div>
-
-<script src="/assets/app.js"></script>
 
 <?php require __DIR__ . '/../includes/footer.php'; ?>
