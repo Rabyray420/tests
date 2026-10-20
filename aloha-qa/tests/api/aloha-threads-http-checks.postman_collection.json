@@ -1,0 +1,185 @@
+{
+  "info": {
+    "_postman_id": "f7bd75bf-7479-4ade-a439-abfabcefaffa",
+    "name": "Aloha Threads: HTTP-проверки",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "59085940",
+    "_collection_link": "https://go.postman.co/collection/59085940-f7bd75bf-7479-4ade-a439-abfabcefaffa?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "GET главная: 200 и название магазина",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Статус 200\", function () {\r\n    pm.response.to.have.status(200);\r\n});\r\n\r\npm.test(\"Ответ быстрее 2000 мс\", function () {\r\n    pm.expect(pm.response.responseTime).to.be.below(2000);\r\n});\r\n\r\npm.test(\"На главной есть название магазина\", function () {\r\n    pm.expect(pm.response.text()).to.include(\"Aloha\");\r\n});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "https://mysuperpetproject.ru/",
+          "protocol": "https",
+          "host": [
+            "mysuperpetproject",
+            "ru"
+          ],
+          "path": [
+            ""
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "POST cart_add без токена: 403",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Без токена: статус 403\", function () {\r\n    pm.response.to.have.status(403);\r\n});\r\n\r\npm.test(\"Без токена: показано сообщение об устаревшей сессии\", function () {\r\n    pm.expect(pm.response.text()).to.include(\"Сессия устарела\");\r\n});\r\n\r\npm.test(\"Без токена: нет перенаправления в корзину\", function () {\r\n    pm.expect(pm.response.headers.has(\"Location\")).to.be.false;\r\n});"
+            ]
+          }
+        }
+      ],
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "product_id ",
+              "value": "1"
+            },
+            {
+              "key": "quantity",
+              "value": "1"
+            },
+            {
+              "key": "redirect",
+              "value": "/index.php"
+            }
+          ]
+        },
+        "url": {
+          "raw": "https://mysuperpetproject.ru/cart_add.php",
+          "protocol": "https",
+          "host": [
+            "mysuperpetproject",
+            "ru"
+          ],
+          "path": [
+            "cart_add.php"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "POST cart_add с неверным токеном: 403",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Неверный токен: статус 403\", function () {\r\n    pm.response.to.have.status(403);\r\n});\r\n\r\npm.test(\"Неверный токен: нет перенаправления в корзину\", function () {\r\n    pm.expect(pm.response.headers.has(\"Location\")).to.be.false;\r\n});"
+            ]
+          }
+        }
+      ],
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "product_id ",
+              "value": "1"
+            },
+            {
+              "key": "quantity",
+              "value": "1"
+            },
+            {
+              "key": "redirect",
+              "value": "/index.php"
+            },
+            {
+              "key": "csrf_token",
+              "value": "abc123"
+            }
+          ]
+        },
+        "url": {
+          "raw": "https://mysuperpetproject.ru/cart_add.php",
+          "protocol": "https",
+          "host": [
+            "mysuperpetproject",
+            "ru"
+          ],
+          "path": [
+            "cart_add.php"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "GET admin/orders гость: 302 на вход",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Гость: статус 302\", function () {\r\n    pm.response.to.have.status(302);\r\n});\r\n\r\npm.test(\"Гость: перенаправление на страницу входа\", function () {\r\n    pm.expect(pm.response.headers.get(\"Location\")).to.include(\"/login.php\");\r\n});\r\n\r\npm.test(\"Гость: данных админки в ответе нет\", function () {\r\n    pm.expect(pm.response.text()).to.not.include(\"Заказы\");\r\n});"
+            ]
+          }
+        }
+      ],
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "https://mysuperpetproject.ru/admin/orders.php?attempt=1",
+          "protocol": "https",
+          "host": [
+            "mysuperpetproject",
+            "ru"
+          ],
+          "path": [
+            "admin",
+            "orders.php"
+          ],
+          "query": [
+            {
+              "key": "attempt",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}
