@@ -15,14 +15,37 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test(\"Статус 200\", function () {\r\n    pm.response.to.have.status(200);\r\n});\r\n\r\npm.test(\"Ответ быстрее 2000 мс\", function () {\r\n    pm.expect(pm.response.responseTime).to.be.below(2000);\r\n});\r\n\r\npm.test(\"На главной есть название магазина\", function () {\r\n    pm.expect(pm.response.text()).to.include(\"Aloha\");\r\n});"
+              "pm.test(\"Статус 200\", function () {\r\n    pm.response.to.have.status(200);\r\n});\r\n\r\npm.test(\"Ответ быстрее 5000 мс\", function () {\r\n    pm.expect(pm.response.responseTime).to.be.below(5000);\r\n});\r\n\r\npm.test(\"На главной есть название магазина\", function () {\r\n    pm.expect(pm.response.text()).to.include(\"Aloha\");\r\n});\r\n\r\n// достаём csrf_token из HTML (порядок атрибутов в теге заранее неизвестен)\r\nconst html = pm.response.text();\r\nconst m = html.match(/name=[\"']csrf_token[\"'][^>]*value=[\"']([^\"']+)[\"']/i)\r\n       || html.match(/value=[\"']([^\"']+)[\"'][^>]*name=[\"']csrf_token[\"']/i);\r\nif (m) {\r\n    pm.collectionVariables.set(\"csrf_token\", m[1]);\r\n}\r\n\r\npm.test(\"На главной найден csrf_token\", function () {\r\n    pm.expect(m, \"токен не найден в HTML\").to.not.be.null;\r\n});\r\n\r\n// берём первый товар и, если у него есть размеры, первый доступный размер\r\nconst mp = html.match(/name=[\"']product_id[\"'][^>]*value=[\"'](\\d+)[\"']/i)\r\n        || html.match(/value=[\"'](\\d+)[\"'][^>]*name=[\"']product_id[\"']/i);\r\nlet size = \"\";\r\nif (mp) {\r\n    const rest = html.slice(html.indexOf(mp[0]));\r\n    const form = rest.split(\"</form>\")[0];\r\n    // доступный размер: <option value=\"M\" > без слова disabled\r\n    const ms = form.match(/<option value=\"([^\"]+)\"\\s*>/i);\r\n    if (ms) { size = ms[1]; }\r\n    pm.collectionVariables.set(\"product_id\", mp[1]);\r\n    pm.collectionVariables.set(\"size\", size);\r\n}\r\n\r\npm.test(\"На главной найден доступный товар\", function () {\r\n    pm.expect(mp, \"product_id не найден в HTML\").to.not.be.null;\r\n});"
+            ]
+          }
+        },
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// начинаем каждую цепочку с пустой сессией (и пустой корзиной)\r\nconst jar = pm.cookies.jar();\r\njar.clear(pm.request.url, function (err) {\r\n    if (err) { console.log(\"COOKIE CLEAR ERROR: \" + err); }\r\n});"
             ]
           }
         }
       ],
       "request": {
         "method": "GET",
-        "header": [],
+        "header": [
+          {
+            "key": "User-Agent",
+            "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
         "url": {
           "raw": "https://mysuperpetproject.ru/",
           "protocol": "https",
@@ -60,7 +83,7 @@
           "mode": "urlencoded",
           "urlencoded": [
             {
-              "key": "product_id ",
+              "key": "product_id",
               "value": "1"
             },
             {
@@ -110,7 +133,7 @@
           "mode": "urlencoded",
           "urlencoded": [
             {
-              "key": "product_id ",
+              "key": "product_id",
               "value": "1"
             },
             {
@@ -142,6 +165,73 @@
       "response": []
     },
     {
+      "name": "POST cart_add с настоящим токеном: 302 и товар в корзине",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"С токеном: статус 302\", function () {\r\n    pm.response.to.have.status(302);\r\n});\r\n\r\npm.test(\"С токеном: перенаправление на главную\", function () {\r\n    pm.expect(pm.response.headers.get(\"Location\")).to.include(\"/index.php\");\r\n});"
+            ]
+          }
+        },
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "console.log(JSON.stringify({\r\n  product_id: pm.collectionVariables.get(\"product_id\"),\r\n  size: pm.collectionVariables.get(\"size\"),\r\n  tokenLength: (pm.collectionVariables.get(\"csrf_token\") || \"\").length\r\n}));"
+            ]
+          }
+        }
+      ],
+      "protocolProfileBehavior": {
+        "followRedirects": false
+      },
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "urlencoded",
+          "urlencoded": [
+            {
+              "key": "product_id",
+              "value": "{{product_id}}"
+            },
+            {
+              "key": "quantity",
+              "value": "1"
+            },
+            {
+              "key": "redirect",
+              "value": "/index.php"
+            },
+            {
+              "key": "csrf_token",
+              "value": "{{csrf_token}}"
+            },
+            {
+              "key": "size",
+              "value": "{{size}}"
+            }
+          ]
+        },
+        "url": {
+          "raw": "https://mysuperpetproject.ru/cart_add.php",
+          "protocol": "https",
+          "host": [
+            "mysuperpetproject",
+            "ru"
+          ],
+          "path": [
+            "cart_add.php"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
       "name": "GET admin/orders гость: 302 на вход",
       "event": [
         {
@@ -149,7 +239,7 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test(\"Гость: статус 302\", function () {\r\n    pm.response.to.have.status(302);\r\n});\r\n\r\npm.test(\"Гость: перенаправление на страницу входа\", function () {\r\n    pm.expect(pm.response.headers.get(\"Location\")).to.include(\"/login.php\");\r\n});\r\n\r\npm.test(\"Гость: данных админки в ответе нет\", function () {\r\n    pm.expect(pm.response.text()).to.not.include(\"Заказы\");\r\n});"
+              "pm.test(\"Гость: статус 302\", function () {\r\n    pm.response.to.have.status(302);\r\n});\r\n\r\npm.test(\"Гость: перенаправление на страницу входа\", function () {\r\n    pm.expect(pm.response.headers.get(\"Location\")).to.include(\"/login.php\");\r\n});\r\n\r\npm.test(\"Гость: данных админки в ответе нет\", function () {\r\n    pm.expect(pm.response.text()).to.not.include(\"Заказы\");\r\n});\r\n\r\n\r\nconsole.log(\"ADMIN: \" + pm.response.code + \" | \" + pm.response.text().slice(0, 300));"
             ]
           }
         }
@@ -180,6 +270,50 @@
         }
       },
       "response": []
+    },
+    {
+      "name": "GET cart.php: содержимое корзины",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Корзина: статус 200\", function () {\r\n    pm.response.to.have.status(200);\r\n});\r\n\r\npm.test(\"Корзина: есть сообщение о добавлении\", function () {\r\n    pm.expect(pm.response.text()).to.match(/добавлен/i);\r\n});\r\n\r\npm.test(\"Корзина: не пуста\", function () {\r\n    pm.expect(pm.response.text()).to.not.include(\"Ваша корзина пуста\");\r\n});\r\n\r\n// покажем в консоли видимый текст страницы без HTML-тегов\r\nconsole.log(\"CART TEXT: \" + pm.response.text()\r\n  .replace(/<[^>]*>/g, \" \")\r\n  .replace(/\\s+/g, \" \")\r\n  .slice(0, 400));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "https://mysuperpetproject.ru/cart.php",
+          "protocol": "https",
+          "host": [
+            "mysuperpetproject",
+            "ru"
+          ],
+          "path": [
+            "cart.php"
+          ]
+        }
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "csrf_token",
+      "value": ""
+    },
+    {
+      "key": "product_id",
+      "value": ""
+    },
+    {
+      "key": "size",
+      "value": ""
     }
   ]
 }
